@@ -9,36 +9,22 @@
 extern "C" {
 #endif
 
-#include "steamkit/steamkit.h"
+#define DEPOT_DOWNLOADER_INVALID_APP_ID UINT32_MAX
+#define DEPOT_DOWNLOADER_INVALID_DEPOT_ID UINT32_MAX
+#define DEPOT_DOWNLOADER_INVALID_MANIFEST_ID UINT64_MAX
 
 typedef struct sk_steam3_session sk_steam3_session_t;
 
-typedef struct {
-    char *username;
-    char *password;
-    bool remember_password;
-    bool use_qr_code;
-    bool skip_app_confirmation;
-    int cell_id;
-    uint32_t login_id;
-} steam3_logon_details_t;
+sk_steam3_session_t* steam3_session_create(const char* username, const char* password, uint32_t app_id, uint32_t cell_id);
+void steam3_session_destroy(sk_steam3_session_t* session);
 
-sk_steam3_session_t *steam3_session_create(const steam3_logon_details_t *details);
-void steam3_session_destroy(sk_steam3_session_t *session);
+int steam3_session_connect(sk_steam3_session_t* session);
+int steam3_session_log_on(sk_steam3_session_t* session);
+int steam3_session_wait_for_callback(sk_steam3_session_t* session, int timeout_ms);
+int steam3_session_request_app_info(sk_steam3_session_t* session, uint32_t app_id);
 
-bool steam3_session_wait_for_credentials(sk_steam3_session_t *session);
-bool steam3_session_is_logged_on(sk_steam3_session_t *session);
-void steam3_session_disconnect(sk_steam3_session_t *session);
-int steam3_session_tick_callbacks(sk_steam3_session_t *session, int timeout_ms);
-
-uint64_t steam3_session_get_manifest_request_code(sk_steam3_session_t *session,
-    uint32_t depot_id, uint32_t app_id, uint64_t manifest_id, const char *branch);
-void steam3_session_request_cdn_auth_token(sk_steam3_session_t *session,
-    uint32_t app_id, uint32_t depot_id, const char *host);
-sk_cdn_auth_token_callback_t *steam3_session_get_cdn_auth_token(sk_steam3_session_t *session,
-    uint32_t app_id, uint32_t depot_id, const char *host);
-
-const char *steam3_session_get_steam_id(const sk_steam3_session_t *session);
+void* steam3_session_download_manifest(sk_steam3_session_t* session, uint32_t depot_id, uint64_t manifest_id, uint64_t request_code, const uint8_t* depot_key, size_t key_len);
+int steam3_session_download_depot_chunk(sk_steam3_session_t* session, uint32_t depot_id, const void* chunk, const uint8_t* depot_key, size_t key_len, uint8_t* buffer, size_t buffer_size);
 
 #ifdef __cplusplus
 }
