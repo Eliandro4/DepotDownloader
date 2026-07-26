@@ -6,7 +6,7 @@
 #include "steamkit/steamkit.h"
 #include "../config.h"
 #include "../persistence.h"
-#include "content_downloader.h"
+#include "../content_downloader.h"
 #include "util.h"
 
 static download_config_t *g_config = NULL;

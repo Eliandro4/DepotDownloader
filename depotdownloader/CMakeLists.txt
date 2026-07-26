@@ -7,11 +7,11 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 add_definitions(-D_GNU_SOURCE)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PROTOBUF_C REQUIRED libprotobuf-c)
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(ZLIB REQUIRED)
+
+add_subdirectory(../../SteamKit/steamkit_c steamkit_c_build)
 
 set(DEPOT_DOWNLOADER_SOURCES
     src/main.c
@@ -30,22 +30,13 @@ target_include_directories(depotdownloader PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_SOURCE_DIR}/../../SteamKit/steamkit_c/include
-    ${PROTOBUF_C_INCLUDE_DIRS}
 )
 
 target_link_libraries(depotdownloader
     steamkit_c
-    ${PROTOBUF_C_LIBRARIES}
     OpenSSL::SSL
     OpenSSL::Crypto
     CURL::libcurl
     ZLIB::ZLIB
     pthread
-)
-
-target_compile_definitions(depotdownloader PRIVATE
-    SK_ENABLE_OPENSSL=1
-    SK_ENABLE_CURL=1
-    SK_ENABLE_ZLIB=1
-    SK_ENABLE_PROTOBUF_C=1
 )
