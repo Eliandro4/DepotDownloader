@@ -14,11 +14,13 @@
 #include <steamkit/types/key_value.h>
 #include <steamkit/steam/authentication/steam_authentication.h>
 #include <steamkit/steam/handlers/client_msg_handler.h>
+#include <steamkit/steam/handlers/steam_unified_messages.h>
 #include <steamkit/steam/cm_client.h>
 
 struct sk_steam3_session {
     sk_steam_client_t* steam_client;
     sk_steam_user_t* steam_user;
+    sk_steam_unified_messages_t* steam_unified_messages;
     sk_steam_apps_t* steam_apps;
     sk_steam_content_t* steam_content;
     sk_cdn_client_t* cdn_client;
@@ -31,6 +33,7 @@ struct sk_steam3_session {
     uint32_t cell_id;
     bool connected;
     bool logged_on;
+    bool skip_mobile_confirmation;
     uint64_t last_manifest_request_code;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
@@ -60,6 +63,12 @@ sk_steam3_session_t* steam3_session_create(const char* username, const char* pas
 
     steam3_session_setup_user_handler(session);
 
+    session->steam_unified_messages = sk_steam_unified_messages_create();
+    if (session->steam_unified_messages) {
+        sk_client_msg_handler_setup((struct sk_client_msg_handler*)session->steam_unified_messages, session->steam_client);
+        sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_unified_messages);
+    }
+
     session->steam_apps = sk_steam_apps_create();
     if (session->steam_apps) {
         sk_client_msg_handler_setup((struct sk_client_msg_handler*)session->steam_apps, session->steam_client);
@@ -88,6 +97,7 @@ sk_steam3_session_t* steam3_session_create(const char* username, const char* pas
     session->username = username ? strdup(username) : NULL;
     session->password = password ? strdup(password) : NULL;
     session->access_token = NULL;
+    session->skip_mobile_confirmation = false;
     printf("[steam3] Session created for username: %s\n", session->username ? session->username : "(null)");
     session->app_id = app_id;
     session->cell_id = cell_id;
@@ -108,6 +118,7 @@ void steam3_session_destroy(sk_steam3_session_t* session) {
     if (session->cdn_client) sk_cdn_client_destroy(session->cdn_client);
     if (session->steam_content) sk_steam_content_destroy(session->steam_content);
     if (session->steam_apps) sk_steam_apps_destroy(session->steam_apps);
+    if (session->steam_unified_messages) sk_steam_unified_messages_destroy(session->steam_unified_messages);
     if (session->steam_user) sk_steam_user_destroy(session->steam_user);
     if (session->steam_published_file) sk_steam_published_file_destroy(session->steam_published_file);
     if (session->steam_cloud) sk_steam_cloud_destroy(session->steam_cloud);
@@ -133,6 +144,11 @@ void steam3_session_set_access_token(sk_steam3_session_t* session, const char* a
     if (!session) return;
     free(session->access_token);
     session->access_token = access_token ? strdup(access_token) : NULL;
+}
+
+void steam3_session_set_skip_mobile_confirmation(sk_steam3_session_t* session, bool skip) {
+    if (!session) return;
+    session->skip_mobile_confirmation = skip;
 }
 
 int steam3_session_authenticate_via_qr(sk_steam3_session_t* session, const char* username, const char* password, bool remember_password) {
@@ -194,7 +210,7 @@ int steam3_session_connect(sk_steam3_session_t* session) {
     return 0;
 }
 
-int steam3_session_log_on(sk_steam3_session_t* session) {
+static int steam3_session_log_on_legacy(sk_steam3_session_t* session, const char* username, const char* password, const char* access_token, const char* auth_code, const char* two_factor_code) {
     if (!session || !session->steam_client || !session->steam_user) return -1;
 
     sk_log_on_details_t* details = sk_log_on_details_create();
@@ -202,14 +218,14 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
 
     details->username = session->username ? strdup(session->username) : NULL;
     details->password = session->password ? strdup(session->password) : NULL;
-    details->access_token = session->access_token ? strdup(session->access_token) : NULL;
+    details->access_token = access_token ? strdup(access_token) : NULL;
     details->cell_id = session->cell_id;
     details->login_id = 0x534B32;
     details->should_remember_password = true;
     details->account_instance = 0;
     details->machine_name = NULL;
-    details->auth_code = NULL;
-    details->two_factor_code = NULL;
+    details->auth_code = auth_code ? strdup(auth_code) : NULL;
+    details->two_factor_code = two_factor_code ? strdup(two_factor_code) : NULL;
 
     sk_steam_user_log_on(session->steam_user, details);
 
@@ -219,17 +235,26 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
 
     uint32_t callback_type = 0;
     uint64_t job_id = 0;
-    bool logged_on = false;
     int result = 0;
 
     for (int retry = 0; retry < 30; ++retry) {
+        fprintf(stderr, "[steam3] Waiting for callback (retry=%d)...\n", retry);
+        fflush(stderr);
         void* data = sk_steam_client_get_next_callback(session->steam_client, &callback_type, &job_id, 5000);
-        if (!data) continue;
+        if (!data) {
+            fprintf(stderr, "[steam3] No callback received in this iteration\n");
+            fflush(stderr);
+            continue;
+        }
+
+        fprintf(stderr, "[steam3] Received callback type=%u\n", callback_type);
+        fflush(stderr);
 
         if (callback_type == SK_CLIENT_CALLBACK_LOGGED_ON) {
             sk_logged_on_callback_t* cb = (sk_logged_on_callback_t*)data;
             result = cb->result;
-            logged_on = (result == 1);
+            fprintf(stderr, "[steam3] LOGGED_ON result=%d\n", result);
+            fflush(stderr);
             sk_steam_client_free_callback_data(data);
             break;
         }
@@ -237,6 +262,8 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
         if (callback_type == SK_CLIENT_CALLBACK_LOGGED_OFF) {
             sk_logged_off_callback_t* cb = (sk_logged_off_callback_t*)data;
             result = cb->result;
+            fprintf(stderr, "[steam3] LOGGED_OFF result=%d\n", result);
+            fflush(stderr);
             sk_steam_client_free_callback_data(data);
             break;
         }
@@ -244,9 +271,10 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
         if (callback_type == SK_CLIENT_CALLBACK_ACCOUNT_INFO) {
             sk_account_info_callback_t* cb = (sk_account_info_callback_t*)data;
             if (cb) {
-                printf("[steam3] AccountInfo: persona=%s country=%s\n",
+                fprintf(stderr, "[steam3] AccountInfo: persona=%s country=%s\n",
                        cb->persona_name ? cb->persona_name : "(null)",
                        cb->country ? cb->country : "(null)");
+                fflush(stderr);
             }
             sk_steam_client_free_callback_data(data);
             continue;
@@ -255,9 +283,231 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
         sk_steam_client_free_callback_data(data);
     }
 
-    session->logged_on = logged_on;
-    printf("[steam3] Logon result: %d, logged_on=%d\n", result, logged_on);
-    return logged_on ? 0 : -1;
+    session->logged_on = (result == 1);
+    printf("[steam3] Logon result: %d\n", result);
+    return result;
+}
+
+static char* steam3_session_authenticate_via_credentials(sk_steam3_session_t* session) {
+    fprintf(stderr, "[steam3] steam3_session_authenticate_via_credentials called\n");
+    fflush(stderr);
+    if (!session || !session->steam_client || !session->username || !session->password) {
+        fprintf(stderr, "[steam3] Missing session/client/username/password\n");
+        fflush(stderr);
+        return NULL;
+    }
+
+    sk_steam_authentication_t* auth = sk_steam_authentication_create(session->steam_client);
+    if (!auth) return NULL;
+
+    sk_auth_session_details_t* details = sk_auth_session_details_create(session->username, session->password);
+    if (!details) {
+        sk_steam_authentication_destroy(auth);
+        return NULL;
+    }
+
+    details->is_remember_password = true;
+
+    sk_credentials_auth_session_t* cred = sk_auth_begin_session_via_credentials(auth, details);
+    if (!cred) {
+        fprintf(stderr, "[steam3] Modern authentication: BeginAuthSessionViaCredentials failed (wrong password or account issue?)\n");
+        fflush(stderr);
+        sk_auth_session_details_destroy(details);
+        sk_steam_authentication_destroy(auth);
+        return NULL;
+    }
+
+    const sk_auth_allowed_confirmation_t* confirmations = NULL;
+    size_t num_confirmations = sk_credentials_auth_session_get_allowed_confirmations(cred, &confirmations);
+    fprintf(stderr, "[steam3] Modern authentication: got %zu confirmation types\n", num_confirmations);
+    fflush(stderr);
+    for (size_t i = 0; i < num_confirmations; ++i) {
+        fprintf(stderr, "[steam3]   confirmation[%zu] type=%d message=%s\n",
+               i, (int)confirmations[i].confirmation_type,
+               confirmations[i].associated_message ? confirmations[i].associated_message : "(null)");
+        fflush(stderr);
+    }
+
+    int preferred_idx = -1;
+    sk_auth_session_guard_type_t preferred_type = SK_AUTH_SESSION_GUARD_TYPE_UNKNOWN;
+
+    for (size_t i = 0; i < num_confirmations; ++i) {
+        if (confirmations[i].confirmation_type == SK_AUTH_SESSION_GUARD_TYPE_NONE) {
+            preferred_idx = (int)i;
+            preferred_type = SK_AUTH_SESSION_GUARD_TYPE_NONE;
+            break;
+        }
+    }
+    if (preferred_idx < 0) {
+        for (size_t i = 0; i < num_confirmations; ++i) {
+            if (confirmations[i].confirmation_type == SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CONFIRMATION) {
+                preferred_idx = (int)i;
+                preferred_type = SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CONFIRMATION;
+                break;
+            }
+        }
+    }
+    if (preferred_idx < 0) {
+        for (size_t i = 0; i < num_confirmations; ++i) {
+            if (confirmations[i].confirmation_type == SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE) {
+                preferred_idx = (int)i;
+                preferred_type = SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE;
+                break;
+            }
+        }
+    }
+    if (preferred_idx < 0) {
+        for (size_t i = 0; i < num_confirmations; ++i) {
+            if (confirmations[i].confirmation_type == SK_AUTH_SESSION_GUARD_TYPE_EMAIL_CODE) {
+                preferred_idx = (int)i;
+                preferred_type = SK_AUTH_SESSION_GUARD_TYPE_EMAIL_CODE;
+                break;
+            }
+        }
+    }
+
+    if (preferred_idx < 0) {
+        fprintf(stderr, "[steam3] No supported Steam Guard confirmation method available\n");
+        fflush(stderr);
+        sk_credentials_auth_session_destroy(cred);
+        sk_auth_session_details_destroy(details);
+        sk_steam_authentication_destroy(auth);
+        return NULL;
+    }
+
+    if (preferred_type == SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CONFIRMATION) {
+        if (!session->skip_mobile_confirmation) {
+            fprintf(stderr, "[steam3] Confirm login via Steam Mobile App? (y/n): \n");
+            fflush(stderr);
+            char answer[16];
+            if (fgets(answer, sizeof(answer), stdin) && (answer[0] == 'y' || answer[0] == 'Y')) {
+                fprintf(stderr, "[steam3] Waiting for mobile confirmation...\n");
+                fflush(stderr);
+                if (sk_credentials_auth_session_update_with_mobile_confirmation(cred) != 0) {
+                    fprintf(stderr, "[steam3] Mobile confirmation failed, falling back to code entry\n");
+                    fflush(stderr);
+                    preferred_type = SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE;
+                }
+            } else {
+                preferred_type = SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE;
+            }
+        } else {
+            preferred_type = SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE;
+        }
+    }
+
+    if (preferred_type == SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE || preferred_type == SK_AUTH_SESSION_GUARD_TYPE_EMAIL_CODE) {
+        int code_idx = -1;
+        for (size_t i = 0; i < num_confirmations; ++i) {
+            if (confirmations[i].confirmation_type == preferred_type) {
+                code_idx = (int)i;
+                break;
+            }
+        }
+        if (code_idx < 0) {
+            fprintf(stderr, "[steam3] No %s confirmation available\n",
+                   preferred_type == SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE ? "2FA" : "email");
+            fflush(stderr);
+            sk_credentials_auth_session_destroy(cred);
+            sk_auth_session_details_destroy(details);
+            sk_steam_authentication_destroy(auth);
+            return NULL;
+        }
+
+        const char* prompt_type = preferred_type == SK_AUTH_SESSION_GUARD_TYPE_DEVICE_CODE ? "2FA" : "email";
+        const char* associated = confirmations[code_idx].associated_message;
+        if (associated && associated[0]) {
+            fprintf(stderr, "[steam3] Enter %s code for %s: ", prompt_type, associated);
+        } else {
+            fprintf(stderr, "[steam3] Enter %s code: ", prompt_type);
+        }
+        fflush(stderr);
+
+        char code[64];
+        if (!fgets(code, sizeof(code), stdin)) {
+            fprintf(stderr, "[steam3] Failed to read code\n");
+            fflush(stderr);
+            sk_credentials_auth_session_destroy(cred);
+            sk_auth_session_details_destroy(details);
+            sk_steam_authentication_destroy(auth);
+            return NULL;
+        }
+        code[strcspn(code, "\n")] = '\0';
+
+        if (sk_credentials_auth_session_update_with_steam_guard_code(cred, code, preferred_type) != 0) {
+            fprintf(stderr, "[steam3] Failed to send Steam Guard code\n");
+            fflush(stderr);
+            sk_credentials_auth_session_destroy(cred);
+            sk_auth_session_details_destroy(details);
+            sk_steam_authentication_destroy(auth);
+            return NULL;
+        }
+    }
+
+    sk_auth_poll_result_t* result = sk_credentials_auth_session_poll_wait_for_result(cred);
+    char* refresh_token = NULL;
+    if (result && result->refresh_token) {
+        refresh_token = strdup(result->refresh_token);
+        fprintf(stderr, "[steam3] Modern authentication successful\n");
+        fflush(stderr);
+    } else {
+        fprintf(stderr, "[steam3] Modern authentication failed or timed out\n");
+        fflush(stderr);
+    }
+
+    sk_auth_poll_result_destroy(result);
+    sk_credentials_auth_session_destroy(cred);
+    sk_auth_session_details_destroy(details);
+    sk_steam_authentication_destroy(auth);
+
+    return refresh_token;
+}
+
+int steam3_session_log_on(sk_steam3_session_t* session) {
+    if (!session || !session->steam_client || !session->steam_user) return -1;
+
+    fprintf(stderr, "[steam3] steam3_session_log_on called, access_token=%s\n", session->access_token ? "set" : "NULL");
+    fflush(stderr);
+
+    if (session->access_token) {
+        fprintf(stderr, "[steam3] Using access token for logon\n");
+        fflush(stderr);
+        int result = steam3_session_log_on_legacy(session, session->username, session->password, session->access_token, NULL, NULL);
+        return (result == 1) ? 0 : -1;
+    }
+
+    fprintf(stderr, "[steam3] Attempting legacy logon\n");
+    fflush(stderr);
+    int result = steam3_session_log_on_legacy(session, session->username, session->password, NULL, NULL, NULL);
+    if (result == 1) return 0;
+
+    if (result == 85) {
+        fprintf(stderr, "[steam3] AccountLoginDeniedNeedTwoFactor\n");
+        fflush(stderr);
+        char code[64];
+        fprintf(stderr, "[steam3] Enter 2FA code: ");
+        fflush(stderr);
+        if (fgets(code, sizeof(code), stdin)) {
+            code[strcspn(code, "\n")] = '\0';
+            int retry = steam3_session_log_on_legacy(session, session->username, session->password, NULL, NULL, code);
+            return (retry == 1) ? 0 : -1;
+        }
+    }
+
+    if (result == 65) {
+        fprintf(stderr, "[steam3] InvalidLoginAuthCode\n");
+        fflush(stderr);
+        char code[64];
+        fprintf(stderr, "[steam3] Enter Steam Guard code: ");
+        fflush(stderr);
+        if (fgets(code, sizeof(code), stdin)) {
+            code[strcspn(code, "\n")] = '\0';
+            int retry = steam3_session_log_on_legacy(session, session->username, session->password, NULL, code, NULL);
+            return (retry == 1) ? 0 : -1;
+        }
+    }
+
+    return -1;
 }
 
 int steam3_session_wait_for_callback(sk_steam3_session_t* session, int timeout_ms) {

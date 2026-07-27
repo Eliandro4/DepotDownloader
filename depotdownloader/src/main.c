@@ -25,6 +25,9 @@ static void print_usage(const char *prog) {
     printf("       [-use-lancache] [-loginid <#>]\n");
     printf("       [-remember-password] [-qr] [-no-mobile]\n");
     printf("       [-debug] [-V|--version]\n");
+    printf("\n");
+    printf("When using -username and -password, Steam Guard codes will be prompted interactively.\n");
+    printf("Use -no-mobile to skip Steam Mobile App confirmation and enter a code instead.\n");
 }
 
 static int add_depot_id(download_config_t *config, uint32_t depot_id) {
@@ -210,7 +213,8 @@ int main(int argc, char **argv) {
             config->download_all_platforms, config->download_all_archs,
             config->download_all_languages, config->language,
             config->low_violence, config->verify_all, config->max_downloads,
-            config->username, config->password, config->access_token);
+            config->username, config->password, config->access_token,
+            config->skip_app_confirmation);
     } else if (config->ugc_id != 0) {
         result = content_downloader_download_ugc(
             config->app_id, config->ugc_id,
@@ -218,7 +222,8 @@ int main(int argc, char **argv) {
             config->download_all_platforms, config->download_all_archs,
             config->download_all_languages, config->language,
             config->low_violence, config->verify_all, config->max_downloads,
-            config->username, config->password, config->access_token);
+            config->username, config->password, config->access_token,
+            config->skip_app_confirmation);
     } else {
         result = content_downloader_download_app(
             config->app_id, config->branch,
@@ -229,6 +234,7 @@ int main(int argc, char **argv) {
             config->download_manifest_only,
             config->using_file_list, config->filelist,
             config->username, config->password, config->access_token,
+            config->skip_app_confirmation,
             config->depot_ids, config->num_depot_ids,
             config->manifest_ids, config->num_manifest_ids);
     }

@@ -529,6 +529,7 @@ int content_downloader_download_app(uint32_t app_id, const char *branch,
     bool verify_all, uint32_t max_downloads, bool download_manifest_only,
     bool using_file_list, const char *filelist,
     const char *username, const char *password, const char *access_token,
+    bool skip_app_confirmation,
     uint32_t *depot_ids, size_t num_depot_ids, uint64_t *manifest_ids, size_t num_manifest_ids) {
 
     (void)download_all_platforms;
@@ -559,6 +560,8 @@ int content_downloader_download_app(uint32_t app_id, const char *branch,
     if (access_token) {
         steam3_session_set_access_token(session, access_token);
     }
+
+    steam3_session_set_skip_mobile_confirmation(session, skip_app_confirmation);
 
     int result = steam3_session_connect(session);
     if (result != 0) {
@@ -652,7 +655,8 @@ int content_downloader_download_pubfile(uint32_t app_id, uint64_t published_file
     const char *install_dir, bool download_all_platforms, bool download_all_archs,
     bool download_all_languages, const char *language, bool low_violence,
     bool verify_all, uint32_t max_downloads,
-    const char *username, const char *password, const char *access_token) {
+    const char *username, const char *password, const char *access_token,
+    bool skip_app_confirmation) {
 
     printf("[content_downloader] download_pubfile app_id=%u pubfile_id=%llu\n",
            app_id, (unsigned long long)published_file_id);
@@ -666,6 +670,8 @@ int content_downloader_download_pubfile(uint32_t app_id, uint64_t published_file
     if (access_token) {
         steam3_session_set_access_token(session, access_token);
     }
+
+    steam3_session_set_skip_mobile_confirmation(session, skip_app_confirmation);
 
     int result = steam3_session_connect(session);
     if (result != 0) {
@@ -717,7 +723,8 @@ int content_downloader_download_ugc(uint32_t app_id, uint64_t ugc_id,
     const char *install_dir, bool download_all_platforms, bool download_all_archs,
     bool download_all_languages, const char *language, bool low_violence,
     bool verify_all, uint32_t max_downloads,
-    const char *username, const char *password, const char *access_token) {
+    const char *username, const char *password, const char *access_token,
+    bool skip_app_confirmation) {
 
     printf("[content_downloader] download_ugc app_id=%u ugc_id=%llu\n",
            app_id, (unsigned long long)ugc_id);
@@ -731,6 +738,8 @@ int content_downloader_download_ugc(uint32_t app_id, uint64_t ugc_id,
     if (access_token) {
         steam3_session_set_access_token(session, access_token);
     }
+
+    steam3_session_set_skip_mobile_confirmation(session, skip_app_confirmation);
 
     int result = steam3_session_connect(session);
     if (result != 0) {

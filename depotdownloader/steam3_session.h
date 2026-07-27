@@ -21,6 +21,7 @@ typedef struct sk_steam3_session sk_steam3_session_t;
 sk_steam3_session_t* steam3_session_create(const char* username, const char* password, uint32_t app_id, uint32_t cell_id);
 void steam3_session_destroy(sk_steam3_session_t* session);
 void steam3_session_set_access_token(sk_steam3_session_t* session, const char* access_token);
+void steam3_session_set_skip_mobile_confirmation(sk_steam3_session_t* session, bool skip);
 int steam3_session_authenticate_via_qr(sk_steam3_session_t* session, const char* username, const char* password, bool remember_password);
 
 int steam3_session_connect(sk_steam3_session_t* session);
