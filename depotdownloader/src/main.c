@@ -60,13 +60,13 @@ static bool parse_args(int argc, char **argv, download_config_t *config) {
             uint64_t manifest = strtoull(argv[++i], NULL, 10);
             add_manifest_id(config, manifest);
         } else if (strcmp(argv[i], "-username") == 0 && i + 1 < argc) {
-            config->username = argv[++i];
+            config->username = strdup(argv[++i]);
         } else if (strcmp(argv[i], "-password") == 0 && i + 1 < argc) {
-            config->password = argv[++i];
+            config->password = strdup(argv[++i]);
         } else if (strcmp(argv[i], "-branch") == 0 && i + 1 < argc) {
-            config->branch = argv[++i];
+            config->branch = strdup(argv[++i]);
         } else if (strcmp(argv[i], "-branchpassword") == 0 && i + 1 < argc) {
-            config->beta_password = argv[++i];
+            config->beta_password = strdup(argv[++i]);
         } else if (strcmp(argv[i], "-all-platforms") == 0) {
             config->download_all_platforms = true;
         } else if (strcmp(argv[i], "-all-archs") == 0) {
@@ -74,7 +74,7 @@ static bool parse_args(int argc, char **argv, download_config_t *config) {
         } else if (strcmp(argv[i], "-all-languages") == 0) {
             config->download_all_languages = true;
         } else if (strcmp(argv[i], "-language") == 0 && i + 1 < argc) {
-            config->language = argv[++i];
+            config->language = strdup(argv[++i]);
         } else if (strcmp(argv[i], "-lowviolence") == 0) {
             config->low_violence = true;
         } else if (strcmp(argv[i], "-ugc") == 0 && i + 1 < argc) {
@@ -82,9 +82,9 @@ static bool parse_args(int argc, char **argv, download_config_t *config) {
         } else if (strcmp(argv[i], "-pubfile") == 0 && i + 1 < argc) {
             config->pubfile_id = strtoull(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "-dir") == 0 && i + 1 < argc) {
-            config->install_directory = argv[++i];
+            config->install_directory = strdup(argv[++i]);
         } else if (strcmp(argv[i], "-filelist") == 0 && i + 1 < argc) {
-            config->filelist = argv[++i];
+            config->filelist = strdup(argv[++i]);
             config->using_file_list = true;
         } else if (strcmp(argv[i], "-debug") == 0) {
             config->debug = true;
@@ -134,9 +134,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (!config->username) config->username = getenv("STEAM_USERNAME");
-    if (!config->password) config->password = getenv("STEAM_PASSWORD");
-    if (!config->install_directory) config->install_directory = getenv("STEAM_DOWNLOAD_DIR");
+    if (!config->username) {
+        const char* env_user = getenv("STEAM_USERNAME");
+        if (env_user) config->username = strdup(env_user);
+    }
+    if (!config->password) {
+        const char* env_pass = getenv("STEAM_PASSWORD");
+        if (env_pass) config->password = strdup(env_pass);
+    }
+    if (!config->install_directory) {
+        const char* env_dir = getenv("STEAM_DOWNLOAD_DIR");
+        if (env_dir) config->install_directory = strdup(env_dir);
+    }
 
     if (!content_downloader_init()) {
         fprintf(stderr, "Failed to initialize downloader\n");
@@ -163,7 +172,10 @@ int main(int argc, char **argv) {
                         sk_auth_poll_result_t* result = sk_qr_auth_session_poll_wait_for_result(qr);
                         if (result && result->access_token) {
                             config->access_token = strdup(result->access_token);
-                            printf("[main] QR login successful\n");
+                            if (!config->username && result->account_name) {
+                                config->username = strdup(result->account_name);
+                            }
+                            printf("[main] QR login successful for %s\n", config->username ? config->username : "(unknown)");
 
                             if (config->remember_password && result->refresh_token) {
                                 account_settings_store_t* store = account_settings_store_create();
@@ -198,7 +210,7 @@ int main(int argc, char **argv) {
             config->download_all_platforms, config->download_all_archs,
             config->download_all_languages, config->language,
             config->low_violence, config->verify_all, config->max_downloads,
-            config->access_token);
+            config->username, config->password, config->access_token);
     } else if (config->ugc_id != 0) {
         result = content_downloader_download_ugc(
             config->app_id, config->ugc_id,
@@ -206,7 +218,7 @@ int main(int argc, char **argv) {
             config->download_all_platforms, config->download_all_archs,
             config->download_all_languages, config->language,
             config->low_violence, config->verify_all, config->max_downloads,
-            config->access_token);
+            config->username, config->password, config->access_token);
     } else {
         result = content_downloader_download_app(
             config->app_id, config->branch,
@@ -216,7 +228,7 @@ int main(int argc, char **argv) {
             config->low_violence, config->verify_all, config->max_downloads,
             config->download_manifest_only,
             config->using_file_list, config->filelist,
-            config->access_token,
+            config->username, config->password, config->access_token,
             config->depot_ids, config->num_depot_ids,
             config->manifest_ids, config->num_manifest_ids);
     }

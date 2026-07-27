@@ -13,6 +13,7 @@
 #include <steamkit/steam/callbacks.h>
 #include <steamkit/types/key_value.h>
 #include <steamkit/steam/authentication/steam_authentication.h>
+#include <steamkit/steam/handlers/client_msg_handler.h>
 
 struct sk_steam3_session {
     sk_steam_client_t* steam_client;
@@ -41,6 +42,7 @@ static void steam3_session_setup_user_handler(sk_steam3_session_t* session) {
     if (!session || !session->steam_client) return;
     session->steam_user = sk_steam_user_create();
     if (session->steam_user) {
+        sk_client_msg_handler_setup((struct sk_client_msg_handler*)session->steam_user, session->steam_client);
         sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_user);
     }
 }
@@ -58,19 +60,34 @@ sk_steam3_session_t* steam3_session_create(const char* username, const char* pas
     steam3_session_setup_user_handler(session);
 
     session->steam_apps = sk_steam_apps_create();
+    if (session->steam_apps) {
+        sk_client_msg_handler_setup((struct sk_client_msg_handler*)session->steam_apps, session->steam_client);
+        sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_apps);
+    }
+
     session->steam_content = sk_steam_content_create();
+    if (session->steam_content) {
+        sk_client_msg_handler_setup((struct sk_client_msg_handler*)session->steam_content, session->steam_client);
+        sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_content);
+    }
+
     session->cdn_client = sk_cdn_client_create(session->steam_client);
+
     session->steam_published_file = sk_steam_published_file_create();
-    session->steam_cloud = sk_steam_cloud_create();
     if (session->steam_published_file) {
+        sk_client_msg_handler_setup((struct sk_client_msg_handler*)session->steam_published_file, session->steam_client);
         sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_published_file);
     }
+
+    session->steam_cloud = sk_steam_cloud_create();
     if (session->steam_cloud) {
+        sk_client_msg_handler_setup((struct sk_client_msg_handler*)session->steam_cloud, session->steam_client);
         sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_cloud);
     }
     session->username = username ? strdup(username) : NULL;
     session->password = password ? strdup(password) : NULL;
     session->access_token = NULL;
+    printf("[steam3] Session created for username: %s\n", session->username ? session->username : "(null)");
     session->app_id = app_id;
     session->cell_id = cell_id;
     session->connected = false;
@@ -194,9 +211,8 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
 
     sk_steam_user_log_on(session->steam_user, details);
 
-    free((void*)details->username);
-    free((void*)details->password);
-    free((void*)details->access_token);
+    printf("[steam3] Logon attempt for user: %s\n", details->username ? details->username : "(null)");
+
     sk_log_on_details_destroy(details);
 
     uint32_t callback_type = 0;
@@ -483,7 +499,11 @@ int steam3_session_get_depot_key(sk_steam3_session_t* session, uint32_t depot_id
     }
 
     memcpy(out_key, cb->depot_key, 32);
-    hash_map_set(session->keys, key_name, out_key);
+    uint8_t* key_copy = (uint8_t*)malloc(32);
+    if (key_copy) {
+        memcpy(key_copy, cb->depot_key, 32);
+        hash_map_set(session->keys, key_name, key_copy);
+    }
     sk_depot_key_callback_destroy(cb);
 
     printf("[steam3] Got depot key for depot=%u\n", depot_id);
