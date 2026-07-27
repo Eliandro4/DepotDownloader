@@ -14,6 +14,7 @@
 #include <steamkit/types/key_value.h>
 #include <steamkit/steam/authentication/steam_authentication.h>
 #include <steamkit/steam/handlers/client_msg_handler.h>
+#include <steamkit/steam/cm_client.h>
 
 struct sk_steam3_session {
     sk_steam_client_t* steam_client;
@@ -187,6 +188,7 @@ int steam3_session_authenticate_via_qr(sk_steam3_session_t* session, const char*
 
 int steam3_session_connect(sk_steam3_session_t* session) {
     if (!session || !session->steam_client) return -1;
+    sk_steam_client_set_cell_id(session->steam_client, session->cell_id);
     sk_steam_client_connect(session->steam_client);
     session->connected = true;
     return 0;
