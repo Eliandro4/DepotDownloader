@@ -24,6 +24,7 @@ typedef struct {
     char *install_directory;
 
     bool using_file_list;
+    char *filelist;
     uint32_t *depot_ids;
     size_t num_depot_ids;
     size_t depot_ids_capacity;
@@ -49,6 +50,7 @@ typedef struct {
     char *branch;
     bool debug;
 
+    char *access_token;
     uint32_t pubfile_id;
     uint64_t ugc_id;
 } download_config_t;

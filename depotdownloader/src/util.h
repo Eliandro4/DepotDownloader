@@ -14,11 +14,13 @@ const char *util_get_steam_arch(void);
 char *util_read_password(void);
 int util_adler_hash(const uint8_t *data, size_t len, uint32_t *out_hash);
 int util_file_sha_hash(const char *filename, uint8_t *out_hash, size_t hash_len);
+int util_buffer_sha_hash(const uint8_t *buffer, size_t len, uint8_t *out_hash, size_t hash_len);
 int util_decode_hex_string(const char *hex, uint8_t **out_bytes, size_t *out_len);
 char *util_symmetric_decrypt_ecb(const uint8_t *input, size_t input_len, const uint8_t *key, size_t key_len);
 int util_set_executable(const char *path, bool value);
 int util_verify_console_launch(void);
 void util_progress(int state, int percent);
+int util_download_file(const char* url, const char* output_path);
 
 #ifdef __cplusplus
 }

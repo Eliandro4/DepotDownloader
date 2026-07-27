@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <steamkit/types/key_value.h>
+#include <steamkit/steam/handlers/steam_published_file.h>
+#include <steamkit/steam/handlers/steam_cloud.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,6 +20,8 @@ typedef struct sk_steam3_session sk_steam3_session_t;
 
 sk_steam3_session_t* steam3_session_create(const char* username, const char* password, uint32_t app_id, uint32_t cell_id);
 void steam3_session_destroy(sk_steam3_session_t* session);
+void steam3_session_set_access_token(sk_steam3_session_t* session, const char* access_token);
+int steam3_session_authenticate_via_qr(sk_steam3_session_t* session, const char* username, const char* password, bool remember_password);
 
 int steam3_session_connect(sk_steam3_session_t* session);
 int steam3_session_log_on(sk_steam3_session_t* session);
@@ -30,6 +35,10 @@ int steam3_session_download_depot_chunk(sk_steam3_session_t* session, uint32_t d
 
 int steam3_session_get_depot_key(sk_steam3_session_t* session, uint32_t depot_id, uint32_t app_id, uint8_t* out_key, size_t key_len);
 const char* steam3_session_request_cdn_auth_token(sk_steam3_session_t* session, uint32_t app_id, uint32_t depot_id, const char* host);
+
+sk_key_value_t* steam3_session_get_pics_app_info(sk_steam3_session_t* session, uint32_t app_id, int timeout_ms);
+sk_steam_published_file_t* steam3_session_get_published_file(sk_steam3_session_t* session);
+sk_steam_cloud_t* steam3_session_get_cloud(sk_steam3_session_t* session);
 
 #ifdef __cplusplus
 }

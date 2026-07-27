@@ -7,6 +7,7 @@
 #include "../config.h"
 #include "../persistence.h"
 #include "../content_downloader.h"
+#include "../steam3_session.h"
 #include "util.h"
 
 static download_config_t *g_config = NULL;
@@ -82,6 +83,9 @@ static bool parse_args(int argc, char **argv, download_config_t *config) {
             config->pubfile_id = strtoull(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "-dir") == 0 && i + 1 < argc) {
             config->install_directory = argv[++i];
+        } else if (strcmp(argv[i], "-filelist") == 0 && i + 1 < argc) {
+            config->filelist = argv[++i];
+            config->using_file_list = true;
         } else if (strcmp(argv[i], "-debug") == 0) {
             config->debug = true;
         } else if (strcmp(argv[i], "-remember-password") == 0) {
@@ -130,6 +134,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (!config->username) config->username = getenv("STEAM_USERNAME");
+    if (!config->password) config->password = getenv("STEAM_PASSWORD");
+    if (!config->install_directory) config->install_directory = getenv("STEAM_DOWNLOAD_DIR");
+
     if (!content_downloader_init()) {
         fprintf(stderr, "Failed to initialize downloader\n");
         download_config_destroy(config);
@@ -137,6 +145,49 @@ int main(int argc, char **argv) {
     }
 
     printf("Depot Downloader (C port) - App %u\n", config->app_id);
+
+    if (config->use_qr_code && !config->access_token) {
+        sk_steam_client_t* client = sk_steam_client_create();
+        if (client) {
+            sk_steam_client_connect(client);
+            sk_steam_authentication_t* auth = sk_steam_authentication_create(client);
+            if (auth) {
+                sk_auth_session_details_t* details = sk_auth_session_details_create(config->username, config->password);
+                if (details) {
+                    sk_qr_auth_session_t* qr = sk_auth_begin_session_via_qr(auth, details);
+                    if (qr) {
+                        const char* url = sk_qr_auth_session_challenge_url(qr);
+                        if (url) {
+                            printf("[main] QR Login URL: %s\n", url);
+                        }
+                        sk_auth_poll_result_t* result = sk_qr_auth_session_poll_wait_for_result(qr);
+                        if (result && result->access_token) {
+                            config->access_token = strdup(result->access_token);
+                            printf("[main] QR login successful\n");
+
+                            if (config->remember_password && result->refresh_token) {
+                                account_settings_store_t* store = account_settings_store_create();
+                                if (store) {
+                                    account_settings_store_set_login_token(store, config->username, result->refresh_token);
+                                    account_settings_store_save(store);
+                                    account_settings_store_destroy(store);
+                                    printf("[main] Saved refresh token\n");
+                                }
+                            }
+                            sk_auth_poll_result_destroy(result);
+                        } else {
+                            fprintf(stderr, "[main] QR authentication failed or timed out\n");
+                        }
+                        sk_qr_auth_session_destroy(qr);
+                    }
+                    sk_auth_session_details_destroy(details);
+                }
+                sk_steam_authentication_destroy(auth);
+            }
+            sk_steam_client_disconnect(client, true);
+            sk_steam_client_destroy(client);
+        }
+    }
 
     int result = DEPOT_DOWNLOADER_RESULT_OK;
 
@@ -146,14 +197,16 @@ int main(int argc, char **argv) {
             config->install_directory,
             config->download_all_platforms, config->download_all_archs,
             config->download_all_languages, config->language,
-            config->low_violence, config->verify_all, config->max_downloads);
+            config->low_violence, config->verify_all, config->max_downloads,
+            config->access_token);
     } else if (config->ugc_id != 0) {
         result = content_downloader_download_ugc(
             config->app_id, config->ugc_id,
             config->install_directory,
             config->download_all_platforms, config->download_all_archs,
             config->download_all_languages, config->language,
-            config->low_violence, config->verify_all, config->max_downloads);
+            config->low_violence, config->verify_all, config->max_downloads,
+            config->access_token);
     } else {
         result = content_downloader_download_app(
             config->app_id, config->branch,
@@ -162,6 +215,8 @@ int main(int argc, char **argv) {
             config->download_all_languages, config->language,
             config->low_violence, config->verify_all, config->max_downloads,
             config->download_manifest_only,
+            config->using_file_list, config->filelist,
+            config->access_token,
             config->depot_ids, config->num_depot_ids,
             config->manifest_ids, config->num_manifest_ids);
     }

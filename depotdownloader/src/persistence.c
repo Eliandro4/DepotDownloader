@@ -138,23 +138,57 @@ int account_settings_store_load_from_file(account_settings_store_t *store, const
 int account_settings_store_save(account_settings_store_t *store) {
     if (!store || !store->loaded || !store->filename) return -1;
 
-    FILE *f = fopen(store->filename, "wb");
-    if (!f) return -1;
-
+    size_t buf_size = 0;
     for (size_t i = 0; i < store->content_server_penalty.count; ++i) {
-        fprintf(f, "penalty:%s=%s\n", store->content_server_penalty.pairs[i].key,
-                store->content_server_penalty.pairs[i].value);
+        buf_size += 64 + strlen(store->content_server_penalty.pairs[i].key) + strlen(store->content_server_penalty.pairs[i].value);
     }
     for (size_t i = 0; i < store->login_tokens.count; ++i) {
-        fprintf(f, "token:%s=%s\n", store->login_tokens.pairs[i].key,
-                store->login_tokens.pairs[i].value);
+        buf_size += 64 + strlen(store->login_tokens.pairs[i].key) + strlen(store->login_tokens.pairs[i].value);
     }
     for (size_t i = 0; i < store->guard_data.count; ++i) {
-        fprintf(f, "guard:%s=%s\n", store->guard_data.pairs[i].key,
-                store->guard_data.pairs[i].value);
+        buf_size += 64 + strlen(store->guard_data.pairs[i].key) + strlen(store->guard_data.pairs[i].value);
+    }
+    if (buf_size == 0) buf_size = 1;
+
+    char* buf = (char*)malloc(buf_size + 1);
+    if (!buf) return -1;
+    size_t used = 0;
+    for (size_t i = 0; i < store->content_server_penalty.count; ++i) {
+        int n = snprintf(buf + used, buf_size - used, "penalty:%s=%s\n",
+            store->content_server_penalty.pairs[i].key,
+            store->content_server_penalty.pairs[i].value);
+        if (n > 0) used += (size_t)n;
+    }
+    for (size_t i = 0; i < store->login_tokens.count; ++i) {
+        int n = snprintf(buf + used, buf_size - used, "token:%s=%s\n",
+            store->login_tokens.pairs[i].key,
+            store->login_tokens.pairs[i].value);
+        if (n > 0) used += (size_t)n;
+    }
+    for (size_t i = 0; i < store->guard_data.count; ++i) {
+        int n = snprintf(buf + used, buf_size - used, "guard:%s=%s\n",
+            store->guard_data.pairs[i].key,
+            store->guard_data.pairs[i].value);
+        if (n > 0) used += (size_t)n;
     }
 
+    uLongf compressed_size = compressBound((uLong)used);
+    uint8_t* compressed = (uint8_t*)malloc(compressed_size);
+    if (!compressed) { free(buf); return -1; }
+
+    if (compress2(compressed, &compressed_size, (const Bytef*)buf, (uLong)used, 9) != Z_OK) {
+        free(compressed);
+        free(buf);
+        return -1;
+    }
+
+    FILE *f = fopen(store->filename, "wb");
+    if (!f) { free(compressed); free(buf); return -1; }
+    fwrite(compressed, 1, compressed_size, f);
     fclose(f);
+
+    free(compressed);
+    free(buf);
     return 0;
 }
 
@@ -273,14 +307,35 @@ int depot_config_store_load_from_file(depot_config_store_t *store, const char *f
 int depot_config_store_save(depot_config_store_t *store) {
     if (!store || !store->loaded || !store->filename) return -1;
 
-    FILE *f = fopen(store->filename, "wb");
-    if (!f) return -1;
+    size_t buf_size = store->count * 48;
+    if (buf_size == 0) buf_size = 1;
 
+    char* buf = (char*)malloc(buf_size + 1);
+    if (!buf) return -1;
+    size_t used = 0;
     for (size_t i = 0; i < store->count; ++i) {
-        fprintf(f, "%u:%llu\n", store->depot_ids[i], (unsigned long long)store->manifest_ids[i]);
+        int n = snprintf(buf + used, buf_size - used, "%u:%llu\n",
+            store->depot_ids[i], (unsigned long long)store->manifest_ids[i]);
+        if (n > 0) used += (size_t)n;
     }
 
+    uLongf compressed_size = compressBound((uLong)used);
+    uint8_t* compressed = (uint8_t*)malloc(compressed_size);
+    if (!compressed) { free(buf); return -1; }
+
+    if (compress2(compressed, &compressed_size, (const Bytef*)buf, (uLong)used, 9) != Z_OK) {
+        free(compressed);
+        free(buf);
+        return -1;
+    }
+
+    FILE *f = fopen(store->filename, "wb");
+    if (!f) { free(compressed); free(buf); return -1; }
+    fwrite(compressed, 1, compressed_size, f);
     fclose(f);
+
+    free(compressed);
+    free(buf);
     return 0;
 }
 

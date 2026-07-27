@@ -19,6 +19,8 @@
 #include <pwd.h>
 #endif
 
+#include <curl/curl.h>
+
 const char *util_get_steam_os(void) {
 #ifdef __linux__
     return "linux";
@@ -124,6 +126,22 @@ int util_file_sha_hash(const char *filename, uint8_t *out_hash, size_t hash_len)
     return 0;
 }
 
+int util_buffer_sha_hash(const uint8_t *buffer, size_t len, uint8_t *out_hash, size_t hash_len) {
+    if (!buffer || !out_hash || hash_len < 20) return -1;
+
+#ifdef SK_ENABLE_OPENSSL
+    SHA_CTX ctx;
+    SHA1_Init(&ctx);
+    SHA1_Update(&ctx, buffer, len);
+    SHA1_Final(out_hash, &ctx);
+#else
+    (void)buffer; (void)len;
+    return -1;
+#endif
+
+    return 0;
+}
+
 int util_decode_hex_string(const char *hex, uint8_t **out_bytes, size_t *out_len) {
     if (!hex || !out_bytes || !out_len) return -1;
     size_t len = strlen(hex);
@@ -183,11 +201,64 @@ int util_verify_console_launch(void) {
 #ifdef _WIN32
     return 0;
 #else
+    if (getuid() == 0) {
+        fprintf(stderr, "Warning: DepotDownloader should not be run as root.\n");
+        return -1;
+    }
+    if (!isatty(STDIN_FILENO)) {
+        fprintf(stderr, "Warning: stdin is not a TTY, console input may not work.\n");
+        return -1;
+    }
     return 0;
 #endif
 }
 
 void util_progress(int state, int percent) {
     (void)state;
-    (void)percent;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    fprintf(stderr, "\r\x1b[KProgress: %d%%", percent);
+    fflush(stderr);
+    if (percent >= 100) {
+        fprintf(stderr, "\n");
+    }
+}
+
+static size_t write_file_data(void* ptr, size_t size, size_t nmemb, void* userdata) {
+    FILE* f = (FILE*)userdata;
+    if (!f) return 0;
+    return fwrite(ptr, size, nmemb, f);
+}
+
+int util_download_file(const char* url, const char* output_path) {
+    if (!url || !output_path) return -1;
+
+    CURL* curl = curl_easy_init();
+    if (!curl) return -1;
+
+    FILE* f = fopen(output_path, "wb");
+    if (!f) {
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_file_data);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, f);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DepotDownloader-C/1.0");
+
+    CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    fclose(f);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK || http_code != 200) {
+        remove(output_path);
+        return -1;
+    }
+
+    return 0;
 }

@@ -36,6 +36,8 @@ void download_config_destroy(download_config_t *config) {
     free(config->branch);
     free(config->beta_password);
     free(config->language);
+    free(config->filelist);
+    free(config->access_token);
     free(config->depot_ids);
     free(config->manifest_ids);
     free(config);

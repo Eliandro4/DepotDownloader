@@ -7,8 +7,12 @@
 #include "../steam3_session.h"
 #include <steamkit/steamkit.h>
 #include <steamkit/steam/handlers/steam_user.h>
+#include <steamkit/steam/handlers/steam_published_file.h>
+#include <steamkit/steam/handlers/steam_cloud.h>
 #include <steamkit/cdn/cdn_client.h>
 #include <steamkit/steam/callbacks.h>
+#include <steamkit/types/key_value.h>
+#include <steamkit/steam/authentication/steam_authentication.h>
 
 struct sk_steam3_session {
     sk_steam_client_t* steam_client;
@@ -16,8 +20,11 @@ struct sk_steam3_session {
     sk_steam_apps_t* steam_apps;
     sk_steam_content_t* steam_content;
     sk_cdn_client_t* cdn_client;
+    sk_steam_published_file_t* steam_published_file;
+    sk_steam_cloud_t* steam_cloud;
     char* username;
     char* password;
+    char* access_token;
     uint32_t app_id;
     uint32_t cell_id;
     bool connected;
@@ -53,8 +60,17 @@ sk_steam3_session_t* steam3_session_create(const char* username, const char* pas
     session->steam_apps = sk_steam_apps_create();
     session->steam_content = sk_steam_content_create();
     session->cdn_client = sk_cdn_client_create(session->steam_client);
+    session->steam_published_file = sk_steam_published_file_create();
+    session->steam_cloud = sk_steam_cloud_create();
+    if (session->steam_published_file) {
+        sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_published_file);
+    }
+    if (session->steam_cloud) {
+        sk_steam_client_add_handler(session->steam_client, (struct sk_client_msg_handler*)session->steam_cloud);
+    }
     session->username = username ? strdup(username) : NULL;
     session->password = password ? strdup(password) : NULL;
+    session->access_token = NULL;
     session->app_id = app_id;
     session->cell_id = cell_id;
     session->connected = false;
@@ -75,6 +91,8 @@ void steam3_session_destroy(sk_steam3_session_t* session) {
     if (session->steam_content) sk_steam_content_destroy(session->steam_content);
     if (session->steam_apps) sk_steam_apps_destroy(session->steam_apps);
     if (session->steam_user) sk_steam_user_destroy(session->steam_user);
+    if (session->steam_published_file) sk_steam_published_file_destroy(session->steam_published_file);
+    if (session->steam_cloud) sk_steam_cloud_destroy(session->steam_cloud);
     if (session->steam_client) {
         sk_steam_client_disconnect(session->steam_client, true);
         sk_steam_client_destroy(session->steam_client);
@@ -83,6 +101,7 @@ void steam3_session_destroy(sk_steam3_session_t* session) {
     pthread_cond_destroy(&session->cond);
     free(session->username);
     free(session->password);
+    free(session->access_token);
     hash_map_clear(session->tokens, free);
     hash_map_destroy(session->tokens, free);
     hash_map_clear(session->keys, free);
@@ -90,6 +109,63 @@ void steam3_session_destroy(sk_steam3_session_t* session) {
     hash_map_clear(session->cdn_auth_tokens, free);
     hash_map_destroy(session->cdn_auth_tokens, free);
     free(session);
+}
+
+void steam3_session_set_access_token(sk_steam3_session_t* session, const char* access_token) {
+    if (!session) return;
+    free(session->access_token);
+    session->access_token = access_token ? strdup(access_token) : NULL;
+}
+
+int steam3_session_authenticate_via_qr(sk_steam3_session_t* session, const char* username, const char* password, bool remember_password) {
+    if (!session || !session->steam_client) return -1;
+
+    sk_steam_authentication_t* auth = sk_steam_authentication_create(session->steam_client);
+    if (!auth) return -1;
+
+    sk_auth_session_details_t* details = sk_auth_session_details_create(username, password);
+    if (!details) {
+        sk_steam_authentication_destroy(auth);
+        return -1;
+    }
+
+    details->is_remember_password = remember_password;
+
+    sk_qr_auth_session_t* qr = sk_auth_begin_session_via_qr(auth, details);
+    if (!qr) {
+        sk_auth_session_details_destroy(details);
+        sk_steam_authentication_destroy(auth);
+        return -1;
+    }
+
+    const char* challenge_url = sk_qr_auth_session_challenge_url(qr);
+    if (challenge_url) {
+        printf("[steam3] QR Login URL: %s\n", challenge_url);
+    }
+
+    sk_auth_poll_result_t* result = sk_qr_auth_session_poll_wait_for_result(qr);
+    if (!result || !result->access_token) {
+        printf("[steam3] QR authentication failed or timed out\n");
+        sk_qr_auth_session_destroy(qr);
+        sk_auth_session_details_destroy(details);
+        sk_steam_authentication_destroy(auth);
+        return -1;
+    }
+
+    printf("[steam3] QR authentication successful\n");
+    steam3_session_set_access_token(session, result->access_token);
+
+    if (remember_password && result->refresh_token) {
+        char key[256];
+        snprintf(key, sizeof(key), "qr_token:%s", session->username ? session->username : "unknown");
+        hash_map_set(session->tokens, key, strdup(result->refresh_token));
+    }
+
+    sk_auth_poll_result_destroy(result);
+    sk_qr_auth_session_destroy(qr);
+    sk_auth_session_details_destroy(details);
+    sk_steam_authentication_destroy(auth);
+    return 0;
 }
 
 int steam3_session_connect(sk_steam3_session_t* session) {
@@ -107,6 +183,7 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
 
     details->username = session->username ? strdup(session->username) : NULL;
     details->password = session->password ? strdup(session->password) : NULL;
+    details->access_token = session->access_token ? strdup(session->access_token) : NULL;
     details->cell_id = session->cell_id;
     details->login_id = 0x534B32;
     details->should_remember_password = true;
@@ -119,6 +196,7 @@ int steam3_session_log_on(sk_steam3_session_t* session) {
 
     free((void*)details->username);
     free((void*)details->password);
+    free((void*)details->access_token);
     sk_log_on_details_destroy(details);
 
     uint32_t callback_type = 0;
@@ -441,4 +519,78 @@ const char* steam3_session_request_cdn_auth_token(sk_steam3_session_t* session, 
 uint64_t steam3_session_get_manifest_request_code(const sk_steam3_session_t* session) {
     if (!session) return 0;
     return session->last_manifest_request_code;
+}
+
+sk_steam_published_file_t* steam3_session_get_published_file(sk_steam3_session_t* session) {
+    if (!session) return NULL;
+    return session->steam_published_file;
+}
+
+sk_steam_cloud_t* steam3_session_get_cloud(sk_steam3_session_t* session) {
+    if (!session) return NULL;
+    return session->steam_cloud;
+}
+
+sk_key_value_t* steam3_session_get_pics_app_info(sk_steam3_session_t* session, uint32_t app_id, int timeout_ms) {
+    if (!session || !session->steam_client) return NULL;
+
+    int iterations = (timeout_ms + 4999) / 5000;
+    if (iterations < 1) iterations = 1;
+
+    for (int retry = 0; retry < iterations; ++retry) {
+        uint32_t callback_type = 0;
+        uint64_t job_id = 0;
+        void* data = sk_steam_client_get_next_callback(session->steam_client, &callback_type, &job_id, 5000);
+        if (!data) continue;
+
+        if (callback_type == SK_CLIENT_CALLBACK_PICS_PRODUCT_INFO) {
+            sk_pics_product_info_callback_t* cb = (sk_pics_product_info_callback_t*)data;
+            for (uint32_t i = 0; i < cb->num_app_info; ++i) {
+                if (cb->app_info_ids[i] == app_id && cb->app_info_kv && cb->app_info_kv[i]) {
+                    sk_key_value_t* kv = cb->app_info_kv[i];
+                    size_t buf_size = 65536;
+                    uint8_t* buf = (uint8_t*)malloc(buf_size);
+                    if (buf) {
+                        size_t written = sk_key_value_serialize(kv, buf, buf_size);
+                        if (written > 0 && written < buf_size) {
+                            sk_key_value_t* copy = sk_key_value_create(NULL);
+                            if (copy && sk_key_value_deserialize(copy, buf, written)) {
+                                sk_steam_client_free_callback_data(data);
+                                free(buf);
+                                return copy;
+                            }
+                            sk_key_value_destroy(copy);
+                        }
+                        free(buf);
+                    }
+                }
+            }
+            sk_steam_client_free_callback_data(data);
+            continue;
+        }
+
+        if (callback_type == SK_CLIENT_CALLBACK_LOGGED_ON) {
+            sk_logged_on_callback_t* cb = (sk_logged_on_callback_t*)data;
+            if (cb) {
+                printf("[steam3] Logged on, result=%d\n", cb->result);
+                session->logged_on = (cb->result == 1);
+            }
+            sk_steam_client_free_callback_data(data);
+            continue;
+        }
+
+        if (callback_type == SK_CLIENT_CALLBACK_LOGGED_OFF) {
+            sk_logged_off_callback_t* cb = (sk_logged_off_callback_t*)data;
+            if (cb) {
+                printf("[steam3] Logged off, result=%d\n", cb->result);
+                session->logged_on = false;
+            }
+            sk_steam_client_free_callback_data(data);
+            continue;
+        }
+
+        sk_steam_client_free_callback_data(data);
+    }
+
+    return NULL;
 }
