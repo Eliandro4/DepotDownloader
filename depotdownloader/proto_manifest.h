@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <steamkit/types/depot_manifest.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +24,8 @@ typedef struct {
     uint32_t checksum;
     uint32_t compressed_length;
     uint32_t uncompressed_length;
+    sk_depot_chunk_t *chunks;
+    size_t num_chunks;
 } proto_manifest_file_t;
 
 typedef struct {
